@@ -1,1 +1,11 @@
-{}
+{
+  "awsAuthRefresh": "aws sso login --profile default",
+  "env": {
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "arn:aws:bedrock:us-east-1:878877078763:application-inference-profile/smrsb0xp3qa6",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "arn:aws:bedrock:us-east-1:878877078763:application-inference-profile/fgho1xlcljub",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "arn:aws:bedrock:us-east-1:878877078763:application-inference-profile/xbmklis0hqkr",
+    "AWS_PROFILE": "default",
+    "AWS_REGION": "us-east-1",
+    "CLAUDE_CODE_USE_BEDROCK": "1"
+  }
+}
