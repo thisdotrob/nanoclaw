@@ -4,6 +4,7 @@
  */
 import { ChildProcess, exec, spawn } from 'child_process';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 
 import {
@@ -26,6 +27,7 @@ import {
   stopContainer,
 } from './container-runtime.js';
 import { detectAuthMode } from './credential-proxy.js';
+import { readEnvFile } from './env.js';
 import { validateAdditionalMounts } from './mount-security.js';
 import { RegisteredGroup } from './types.js';
 
@@ -199,6 +201,19 @@ function buildVolumeMounts(
     readonly: false,
   });
 
+  // AWS credentials for Bedrock authentication (if enabled)
+  const awsCredsDir = path.join(process.env.HOME || os.homedir(), '.aws');
+  if (fs.existsSync(awsCredsDir)) {
+    const envVars = readEnvFile(['CLAUDE_CODE_USE_BEDROCK']);
+    if (envVars.CLAUDE_CODE_USE_BEDROCK === '1') {
+      mounts.push({
+        hostPath: awsCredsDir,
+        containerPath: '/home/node/.aws',
+        readonly: true,
+      });
+    }
+  }
+
   // Additional mounts validated against external allowlist (tamper-proof from containers)
   if (group.containerConfig?.additionalMounts) {
     const validatedMounts = validateAdditionalMounts(
@@ -221,21 +236,51 @@ function buildContainerArgs(
   // Pass host timezone so container's local time matches the user's
   args.push('-e', `TZ=${TIMEZONE}`);
 
-  // Route API traffic through the credential proxy (containers never see real secrets)
-  args.push(
-    '-e',
-    `ANTHROPIC_BASE_URL=http://${CONTAINER_HOST_GATEWAY}:${CREDENTIAL_PROXY_PORT}`,
-  );
+  // Check if using AWS Bedrock
+  const envVars = readEnvFile([
+    'CLAUDE_CODE_USE_BEDROCK',
+    'AWS_PROFILE',
+    'AWS_REGION',
+    'ANTHROPIC_DEFAULT_HAIKU_MODEL',
+    'ANTHROPIC_DEFAULT_OPUS_MODEL',
+    'ANTHROPIC_DEFAULT_SONNET_MODEL',
+  ]);
 
-  // Mirror the host's auth method with a placeholder value.
-  // API key mode: SDK sends x-api-key, proxy replaces with real key.
-  // OAuth mode:   SDK exchanges placeholder token for temp API key,
-  //               proxy injects real OAuth token on that exchange request.
-  const authMode = detectAuthMode();
-  if (authMode === 'api-key') {
-    args.push('-e', 'ANTHROPIC_API_KEY=placeholder');
+  if (envVars.CLAUDE_CODE_USE_BEDROCK === '1') {
+    // AWS Bedrock mode: pass AWS credentials directly, skip proxy
+    args.push('-e', 'CLAUDE_CODE_USE_BEDROCK=1');
+    if (envVars.AWS_PROFILE) {
+      args.push('-e', `AWS_PROFILE=${envVars.AWS_PROFILE}`);
+    }
+    if (envVars.AWS_REGION) {
+      args.push('-e', `AWS_REGION=${envVars.AWS_REGION}`);
+    }
+    if (envVars.ANTHROPIC_DEFAULT_HAIKU_MODEL) {
+      args.push('-e', `ANTHROPIC_DEFAULT_HAIKU_MODEL=${envVars.ANTHROPIC_DEFAULT_HAIKU_MODEL}`);
+    }
+    if (envVars.ANTHROPIC_DEFAULT_OPUS_MODEL) {
+      args.push('-e', `ANTHROPIC_DEFAULT_OPUS_MODEL=${envVars.ANTHROPIC_DEFAULT_OPUS_MODEL}`);
+    }
+    if (envVars.ANTHROPIC_DEFAULT_SONNET_MODEL) {
+      args.push('-e', `ANTHROPIC_DEFAULT_SONNET_MODEL=${envVars.ANTHROPIC_DEFAULT_SONNET_MODEL}`);
+    }
   } else {
-    args.push('-e', 'CLAUDE_CODE_OAUTH_TOKEN=placeholder');
+    // Standard mode: route API traffic through the credential proxy
+    args.push(
+      '-e',
+      `ANTHROPIC_BASE_URL=http://${CONTAINER_HOST_GATEWAY}:${CREDENTIAL_PROXY_PORT}`,
+    );
+
+    // Mirror the host's auth method with a placeholder value.
+    // API key mode: SDK sends x-api-key, proxy replaces with real key.
+    // OAuth mode:   SDK exchanges placeholder token for temp API key,
+    //               proxy injects real OAuth token on that exchange request.
+    const authMode = detectAuthMode();
+    if (authMode === 'api-key') {
+      args.push('-e', 'ANTHROPIC_API_KEY=placeholder');
+    } else {
+      args.push('-e', 'CLAUDE_CODE_OAUTH_TOKEN=placeholder');
+    }
   }
 
   // Runtime-specific args for host gateway resolution
